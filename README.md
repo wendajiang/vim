@@ -33,3 +33,9 @@
 ### 查看更新日志：
 
 [`update_log.md`](update_log.md)
+**error:the pyflakes.vim plugin requires Vim to be compiled with +python**
+
+solution : git clone --recursive git://github.com/kevinw/pyflakes-vim.git
+
+然后，删除.vim/ftplugin
+将clone到的pyflakes/ftplugin 拷贝到.vim
