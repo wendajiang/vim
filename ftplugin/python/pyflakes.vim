@@ -24,106 +24,49 @@ endif
 if !exists("b:did_python_init")
     let b:did_python_init = 0
 
-    if !has('python')
-        echoerr "Error: the pyflakes.vim plugin requires Vim to be compiled with +python"
+    if !has('python') && !has('python3')
+        echoerr "Error: Requires Vim compiled with +python or +python3"
         finish
     endif
+    " Default to Python 2
+    if has('python')
+        let py_cmd_ver = 'python'
+    else
+        let py_cmd_ver = 'python3'
+    endif
+    if exists('g:pyflakes_prefer_python_version')
+        if g:pyflakes_prefer_python_version == 3 && has('python3')
+            let py_cmd_ver = 'python3'
+        elseif g:pyflakes_prefer_python_version == 2 && has('python')
+            let py_cmd_ver = 'python'
+        endif
+    endif
+    if py_cmd_ver == 'python'
+        command! -nargs=1 Python python <args>
+    else
+        command! -nargs=1 Python python3 <args>
+    endif
 
-if !exists('g:pyflakes_use_quickfix')
-    let g:pyflakes_use_quickfix = 1
-endif
+    if !exists('g:pyflakes_use_quickfix')
+        let g:pyflakes_use_quickfix = 1
+    endif
 
-
-    python << EOF
+Python << EOF
 import vim
-import os.path
+from os.path import dirname, join as pjoin
 import sys
 
 if sys.version_info[:2] < (2, 5):
     raise AssertionError('Vim must be compiled with Python 2.5 or higher; you have ' + sys.version)
 
 # get the directory this script is in: the pyflakes python module should be installed there.
-scriptdir = os.path.join(os.path.dirname(vim.eval('expand("<sfile>")')), 'pyflakes')
-sys.path.insert(0, scriptdir)
+script_dir = dirname(vim.eval('expand("<sfile>")'))
+flakes_dir = pjoin(script_dir, 'pyflakes')
+for path in (script_dir, flakes_dir):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
-import ast
-from pyflakes import checker, messages
-from operator import attrgetter
-import re
-
-class loc(object):
-    def __init__(self, lineno, col=None):
-        self.lineno = lineno
-        self.col_offset = col
-
-class SyntaxError(messages.Message):
-    message = 'could not compile: %s'
-    def __init__(self, filename, lineno, col, message):
-        messages.Message.__init__(self, filename, loc(lineno, col))
-        self.message_args = (message,)
-
-class blackhole(object):
-    write = flush = lambda *a, **k: None
-
-def check(buffer):
-    filename = buffer.name
-    contents = buffer[:]
-
-    # shebang usually found at the top of the file, followed by source code encoding marker.
-    # assume everything else that follows is encoded in the encoding.
-    encoding_found = False
-    for n, line in enumerate(contents):
-        if n >= 2:
-            break
-        elif re.match(r'#.*coding[:=]\s*([-\w.]+)', line):
-            contents = ['']*(n+1) + contents[n+1:]
-            break
-
-    contents = '\n'.join(contents) + '\n'
-
-    vimenc = vim.eval('&encoding')
-    if vimenc:
-        contents = contents.decode(vimenc)
-
-    builtins = set(['__file__'])
-    try:
-        builtins.update(set(eval(vim.eval('string(g:pyflakes_builtins)'))))
-    except Exception:
-        pass
-
-    try:
-        # TODO: use warnings filters instead of ignoring stderr
-        old_stderr, sys.stderr = sys.stderr, blackhole()
-        try:
-            tree = ast.parse(contents, filename or '<unknown>')
-        finally:
-            sys.stderr = old_stderr
-    except:
-        try:
-            value = sys.exc_info()[1]
-            lineno, offset, line = value[1][1:]
-        except IndexError:
-            lineno, offset, line = 1, 0, ''
-        if line and line.endswith("\n"):
-            line = line[:-1]
-
-        return [SyntaxError(filename, lineno, offset, str(value))]
-    else:
-        # pyflakes looks to _MAGIC_GLOBALS in checker.py to see which
-        # UndefinedNames to ignore
-        old_globals = getattr(checker,' _MAGIC_GLOBALS', [])
-        checker._MAGIC_GLOBALS = set(old_globals) | builtins
-
-        w = checker.Checker(tree, filename)
-
-        checker._MAGIC_GLOBALS = old_globals
-
-        w.messages.sort(key = attrgetter('lineno'))
-        return w.messages
-
-
-def vim_quote(s):
-    return s.replace("'", "''")
+from flaker import check, vim_quote, SyntaxError
 EOF
     let b:did_python_init = 1
 endif
@@ -201,6 +144,7 @@ if !exists("*s:ActivatePyflakesQuickFixWindow")
         try
             silent colder 9 " go to the bottom of quickfix stack
         catch /E380:/
+        catch /E788:/
         endtry
 
         if s:pyflakes_qf > 0
@@ -225,34 +169,39 @@ if !exists("*s:RunPyflakes")
         else
             let b:cleared = 1
         endif
-        
+
         let b:matched = []
         let b:matchedlines = {}
 
         let b:qf_list = []
         let b:qf_window_count = -1
-        
-        python << EOF
+
+        Python << EOF
 for w in check(vim.current.buffer):
+    if not isinstance(w.lineno, int):
+        lineno = str(w.lineno.lineno)
+    else:
+        lineno = str(w.lineno)
+
     vim.command('let s:matchDict = {}')
-    vim.command("let s:matchDict['lineNum'] = " + str(w.lineno))
+    vim.command("let s:matchDict['lineNum'] = " + lineno)
     vim.command("let s:matchDict['message'] = '%s'" % vim_quote(w.message % w.message_args))
-    vim.command("let b:matchedlines[" + str(w.lineno) + "] = s:matchDict")
+    vim.command("let b:matchedlines[" + lineno + "] = s:matchDict")
     
     vim.command("let l:qf_item = {}")
     vim.command("let l:qf_item.bufnr = bufnr('%')")
     vim.command("let l:qf_item.filename = expand('%')")
-    vim.command("let l:qf_item.lnum = %s" % str(w.lineno))
+    vim.command("let l:qf_item.lnum = %s" % lineno)
     vim.command("let l:qf_item.text = '%s'" % vim_quote(w.message % w.message_args))
     vim.command("let l:qf_item.type = 'E'")
 
     if getattr(w, 'col', None) is None or isinstance(w, SyntaxError):
         # without column information, just highlight the whole line
         # (minus the newline)
-        vim.command(r"let s:mID = matchadd('PyFlakes', '\%" + str(w.lineno) + r"l\n\@!')")
+        vim.command(r"let s:mID = matchadd('PyFlakes', '\%" + lineno + r"l\n\@!')")
     else:
         # with a column number, highlight the first keyword there
-        vim.command(r"let s:mID = matchadd('PyFlakes', '^\%" + str(w.lineno) + r"l\_.\{-}\zs\k\+\k\@!\%>" + str(w.col) + r"c')")
+        vim.command(r"let s:mID = matchadd('PyFlakes', '^\%" + lineno + r"l\_.\{-}\zs\k\+\k\@!\%>" + str(w.col) + r"c')")
 
         vim.command("let l:qf_item.vcol = 1")
         vim.command("let l:qf_item.col = %s" % str(w.col + 1))
@@ -267,7 +216,7 @@ EOF
                 call setqflist(b:qf_list, 'r')
             else
                 " one pyflakes quickfix window for all buffer
-                call setqflist(b:qf_list, '')
+                call setqflist(b:qf_list, ' ')
                 let s:pyflakes_qf = s:GetQuickFixStackCount()
             endif
         endif
