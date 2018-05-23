@@ -25,7 +25,7 @@ echo "wendajiang正在努力为您安装bundle程序" > wendajiang
 echo "安装完毕将自动退出" >> wendajiang
 echo "请耐心等待" >> wendajiang
 vim wendajiang -c "BundleInstall" -c "q" -c "q"
-rm wenddajiang
+rm wendajiang
 git clone --recursive git://github.com/kevinw/pyflakes-vim.git
 rm -rf ~/.vim/ftplugin 
 mv ~/pyflakes-vim/ftplugin .vim/
